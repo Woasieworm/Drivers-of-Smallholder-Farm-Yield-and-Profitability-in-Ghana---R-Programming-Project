@@ -1,0 +1,17 @@
+# R project / session files
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj
+
+# Knitr intermediate files
+*_cache/
+*_files/
+
+# Generated interactive map (produced by knitting final_project.Rmd)
+farm_interactive_map.html
+
+# OS / editor junk
+.DS_Store
+__MACOSX/

@@ -1,0 +1,1111 @@
+---
+title: |
+  DSCD 602 Final Group Project\
+  Drivers of Smallholder Farm Yield and Profitability in Ghana: Evidence from the Ghana Agricultural Household Survey (GAHS)
+author:
+  - "Margaret Naa Dei Neequaye - 22425065"
+  - "Fred Achi - 22424751"
+  - "Korang Pearl Antwi - 22425005"
+  - "Gilbert Woasieworm Adjei - 22425084"
+  - "Lydia Boatemaa Oduro - 22425051"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+  word_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+header-includes:
+  - \renewcommand{\contentsname}{Table of Contents}
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.align = "center", dpi = 150
+)
+set.seed(42)
+
+library(dplyr)
+library(tidyr)
+library(readr)
+library(stringr)
+library(forcats)
+library(ggplot2)
+library(patchwork)
+library(viridis)
+library(sf)
+library(leaflet)
+library(broom)
+library(rstatix)
+library(vcd)
+library(car)
+library(MASS, exclude = c("select"))
+library(cluster)
+library(factoextra)
+library(flextable)
+library(officer)
+library(gtsummary)
+```
+
+\newpage
+
+**Group Members:**
+
+| # | Member Name | Student ID |
+|---|---|---|
+| 1 | Margaret Naa Dei Neequaye | 22425065 |
+| 2 | Fred Achi | 22424751 |
+| 3 | Korang Pearl Antwi | 22425005 |
+| 4 | Gilbert Woasieworm Adjei | 22425084 |
+| 5 | Lydia Boatemaa Oduro | 22425051 |
+
+
+**Dataset Option Selected:** Option A: Ghana Agricultural Household Survey (GAHS)
+
+\newpage
+
+# Contributions Table
+
+The table below records which group member(s) were primarily responsible for each task.
+
+```{r contributions-table}
+contrib <- data.frame(
+  Task = c(
+    "Task 1: Import, Join, Missing Value Audit",
+    "Task 2: Data Wrangling Pipeline",
+    "Task 3: Exploratory Data Analysis & Visualisation",
+    "Task 4: Descriptive & Inferential Statistics",
+    "Task 5: Regression Analysis",
+    "Task 6: Predictive Analytics (Unsupervised ML)",
+    "Task 7: Presentation Slides",
+    "Report Compilation, Editing & Proofreading"
+  ),
+  Primary_Contributor = c(
+    "Margaret Naa Dei Neequaye - 22425065", "Fred Achi - 22424751", 
+    "Korang Pearl Antwi - 22425005", "Gilbert Woasieworm Adjei - 22425084",
+    "Lydia Boatemaa Oduro - 22425051", 
+    "Margaret Naa Dei Neequaye - 22425065 & Fred Achi - 22424751", 
+    "Gilbert Woasieworm Adjei - 22425084", 
+    "Korang Pearl Antwi - 22425005 & Lydia Boatemaa Oduro - 22425051"
+  )
+)
+flextable(contrib) %>%
+  set_caption("Group contributions by task") %>%
+  autofit() %>%
+  fit_to_width(max_width = 6.5) %>%
+  bold(part = "header") %>%
+  bg(part = "header", bg = "#1E2761") %>%
+  color(part = "header", color = "white")
+```
+
+\newpage
+
+# Note on AI Usage
+
+The group discloses that AI language model tools were used during the preparation of this report. Specifically, AI assistance was used to help refine grammar throughout the document, and to help troubleshoot R errors encountered. All analytical decisions, variable selections, and statistical choices remain the group’s own.
+
+\newpage
+
+# 0. Introduction and Analytical Question
+
+Agricultural productivity is central to household welfare and food security in Ghana, where smallholder farming remains the primary livelihood for a large share of the rural population. Yet farm outcomes vary enormously across regions, crop types, and farming practices, and it is not always obvious which of the many factors a farmer or policymaker could influence. Input use, extension access, land tenure, credit access and market proximity actually matter most for productivity and profitability.
+
+This project uses the **Ghana Agricultural Household Survey (GAHS)** which is a simulated but realistically structured dataset of 2,000 farm households linked to 120 local markets across all 16 regions of Ghana, to investigate the following analytical question:
+
+> **What farm-level, behavioural, and market-access factors are associated with higher crop yield and farm profitability among smallholder farmers in Ghana, and can farmers be usefully segmented into distinct typologies based on their production and market-access profiles?**
+
+We approach this question in three complementary ways over the course of this report. First (Tasks 3–4), we explore and describe how yield and profitability vary across key farmer, farm, and market characteristics, and formally test several of the differences we observe. Second (Task 5), we model yield directly using multiple linear regression, to quantify the association between specific inputs (farm size, fertiliser use, extension contact) and yield while controlling for regional and land-tenure context. Third (Task 6), rather than predicting a single outcome, we use unsupervised clustering to ask a complementary question: do farmers naturally group into distinct profiles based on their scale, input use, and market access, and if so, what do those profiles look like, and where in Ghana are they concentrated?
+
+Every wrangling decision, statistical test, and modelling choice in the sections that follow is stated and justified at the point it is made, in line with the project's central requirement that analytical choices be transparent and defensible, not merely technically correct.
+
+\newpage
+
+# 1. Task 1: Data Import, Joining, and Initial Inspection
+
+## 1a. Import Both Files
+
+We import both GAHS files using `readr::read_csv()`. The **farm-level file** (`gahs_farm.csv`) contains one row per farm household; the **market-level file** (`gahs_market.csv`) contains one row per surveyed market.
+
+```{r task1-import}
+farm <- read_csv("gahs_farm.csv", show_col_types = FALSE)
+market <- read_csv("gahs_market.csv", show_col_types = FALSE)
+```
+
+```{r task1-glimpse-farm}
+glimpse(farm)
+```
+
+```{r task1-glimpse-market}
+glimpse(market)
+```
+
+**Structure summary.** The farm-level file contains `r nrow(farm)` observations of `r ncol(farm)` variables, mixing numeric (e.g. `Farm_Size_Ha`, `Yield_Tonnes_Ha`, `Farm_Revenue_GHS`), character/categorical (e.g. `Region`, `Land_Tenure`, `Crop_Type`, `Education_Level`), and several designated target variables (`Farm_Profitable`, `Sells_Surplus`, `Tech_Adoption`). The market-level file contains `r nrow(market)` observations of `r ncol(market)` variables describing market infrastructure, prices, and trading activity. On inspection, the most immediately important variables for our analysis are `Yield_Tonnes_Ha` and `Farm_Profit_GHS` as candidate outcome variables, `Farm_Size_Ha`, `Fertiliser_Kg_Ha`, `Extension_Visits_Year`, `Education_Level`, `Soil_Quality`, `Region`, and `Land_Tenure` as candidate predictors, and `Region` together with `Survey_Year` as the evident join key linking the two files, since both are present in both datasets with matching value formats.
+
+## 1b. Join the Two Files
+
+**(a) Join type and justification.** Both files share `Region` and `Survey_Year`. However, before joining directly on these keys, we checked how many markets exist per Region-Year combination:
+
+```{r task1-market-counts}
+market_counts <- market %>% count(Region, Survey_Year)
+summary(market_counts$n)
+```
+
+On average there are `r round(mean(market_counts$n),1)` markets per Region-Year combination (up to `r max(market_counts$n)`), which means a naive row-level join of `farm` to `market` on `Region` and `Survey_Year` would be a **many-to-many** join: every farm would be duplicated once for every market surveyed in its region and year. We verified this is exactly what happens:
+
+```{r task1-naive-join-demo}
+naive_join_rows <- farm %>%
+  left_join(market, by = c("Region", "Survey_Year"),
+            relationship = "many-to-many") %>%
+  nrow()
+naive_join_rows
+```
+
+A naive join inflates the dataset from `r nrow(farm)` to `r naive_join_rows` rows, every farm record is duplicated across all markets in its region-year, which would corrupt every subsequent farm-level analysis (each farm's characteristics would be counted multiple times). Since our unit of analysis is the **individual farm**, this is the wrong join. The correct approach is to first **aggregate** the market file to one summary row per Region and Survey_Year (taking the mean of the relevant numeric market indicators), and then perform a **left join** of this aggregated market summary onto the farm data. We use a left join (not inner) because we want to retain every farm record even if, for some region-year combination, no market data happens to be available, an inner join would silently drop farms, which is undesirable when farm-level records are our primary unit of analysis.
+
+```{r task1-market-agg}
+market_agg <- market %>%
+  group_by(Region, Survey_Year) %>%
+  summarise(
+    Market_Traders_Count_avg    = mean(Market_Traders_Count, na.rm = TRUE),
+    Infrastructure_Score_avg    = mean(Infrastructure_Score, na.rm = TRUE),
+    Maize_Price_GHS_avg         = mean(Maize_Price_GHS, na.rm = TRUE),
+    Cassava_Price_GHS_avg       = mean(Cassava_Price_GHS, na.rm = TRUE),
+    Market_Efficiency_Score_avg = mean(Market_Efficiency_Score, na.rm = TRUE),
+    Pct_Cold_Storage_Markets    = mean(Cold_Storage_Available == "Yes", na.rm = TRUE) * 100,
+    Pct_High_Volume_Markets     = mean(High_Volume_Market == "Yes", na.rm = TRUE) * 100,
+    n_markets_region_year       = n(),
+    .groups = "drop"
+  )
+
+dat_joined <- farm %>%
+  left_join(market_agg, by = c("Region", "Survey_Year"))
+```
+
+**(b) Duplicate column names.** Because we aggregated `market` down to `Region` and `Survey_Year` (the exact join keys) before joining, and renamed every summarised market indicator with an `_avg` or descriptive suffix, no column name collisions occur between `dat_joined` and the original `farm` variables, `dplyr::left_join()` would otherwise have automatically appended `.x`/`.y` suffixes to any clashing names. We confirm this explicitly:
+
+```{r task1-check-dupes}
+any(duplicated(names(dat_joined)))
+nrow(dat_joined) == nrow(farm)
+```
+
+The joined dataset has exactly `r nrow(dat_joined)` rows, identical to the original farm file, confirming the join preserved one row per farm with no duplication.
+
+**(c) First 10 rows of the joined dataset.**
+
+```{r task1-head}
+dat_joined %>%
+  slice_head(n = 10) %>%
+  select(Farm_ID, Region, Survey_Year, Yield_Tonnes_Ha, Farm_Profit_GHS,
+         Infrastructure_Score_avg, Market_Efficiency_Score_avg) %>%
+  flextable() %>%
+  set_caption("First 10 rows of the joined GAHS dataset (selected columns)") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27) 
+```
+
+## 1c. Missing Value Audit
+
+**(a) Missing counts and percentages for every variable.**
+
+```{r task1-missing-audit}
+missing_summary <- dat_joined %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  mutate(Pct_Missing = round(100 * N_Missing / nrow(dat_joined), 2)) %>%
+  arrange(desc(Pct_Missing)) %>%
+  filter(N_Missing > 0)
+
+missing_summary %>%
+  flextable() %>%
+  set_caption("Missing value counts and percentages, joined GAHS dataset") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27)
+```
+
+**(b) Strategy for the highest-missingness variables.**
+
+The variable with by far the highest missingness is `Credit_Amount_GHS` (`r missing_summary$Pct_Missing[missing_summary$Variable=="Credit_Amount_GHS"]`% missing). We first check whether this missingness is structural:
+
+```{r task1-credit-check}
+all(is.na(dat_joined$Credit_Amount_GHS) == (dat_joined$Access_to_Credit == "No"))
+```
+
+This confirms every missing value in `Credit_Amount_GHS` corresponds exactly to a farmer who did **not** access credit (`Access_to_Credit == "No"`), the variable is simply not applicable to non-borrowers, not missing at random. Imputing a loan amount for a farmer who never took a loan would fabricate data and bias any analysis involving this variable. **Strategy: retain as NA and use `na.rm = TRUE`** throughout (Task 1c strategy iv), we never impute this variable, and treat "no credit accessed" as a valid state represented by `Credit_Amount_GHS = NA` together with `Access_to_Credit = "No"`.
+
+For the remaining variables with moderate missingness, we apply median or group-level median imputation (strategy ii/iii), implemented immediately below so the before-and-after comparison required by this task is visible at this point. A fuller, more nuanced version of this imputation, notably splitting `Fertiliser_Kg_Ha` by fertiliser-user status rather than pooling users and non-users, is carried out again as part of the Task 2 wrangling pipeline, where it is integrated with the other pipeline steps and is the version that actually feeds the analysis-ready `dat_clean`. The implementation here in Task 1c is therefore a standalone demonstration of the strategy, kept separate from `dat_joined` so it does not interfere with the more careful version built in Task 2.
+
+```{r task1c-implement}
+missing_before_1c <- dat_joined %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing_Before") %>%
+  filter(N_Missing_Before > 0)
+
+dat_joined_audited <- dat_joined %>%
+  mutate(across(c(Farm_Size_Ha, Fertiliser_Kg_Ha, Input_Cost_GHS,
+                   Food_Insecurity_Score, Yield_Tonnes_Ha,
+                   Farm_Revenue_GHS, Farm_Profit_GHS, Post_Harvest_Loss_Pct),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .))) %>%
+  group_by(Region) %>%
+  mutate(across(c(Annual_Rainfall_mm, Distance_to_Market_km),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .))) %>%
+  ungroup()
+
+missing_after_1c <- dat_joined_audited %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing_After") %>%
+  filter(N_Missing_After > 0)
+
+missing_before_1c %>%
+  left_join(missing_after_1c, by = "Variable") %>%
+  mutate(N_Missing_After = replace_na(N_Missing_After, 0)) %>%
+  flextable() %>%
+  set_caption("Task 1c: missing counts before and after initial resolution") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27)
+```
+
+As the table shows, every variable resolved here drops to zero missing except `Credit_Amount_GHS`, which remains NA by design per the strategy stated above. `Fertiliser_Kg_Ha` is included in this initial pass using a simple pooled median purely to demonstrate the before-and-after comparison at this point in the report; Task 2 replaces this with the statistically preferable split-by-user-status version before it is carried into `dat_clean`, since a pooled median here would understate the true fertiliser rate among users by blending it with the large number of legitimate zeros from non-users.
+
+\newpage
+# 2. Task 2: Data Wrangling Pipeline
+
+## 2a. Variable Selection and Justification
+
+Before wrangling, we declare our analytical choices explicitly:
+
+- **Primary outcome variable:** `Yield_Tonnes_Ha` (continuous): crop yield in tonnes per hectare. This is one of the designated target variables in the GAHS catalogue and is the most direct measure of farm productivity.
+- **Secondary outcome variable:** `Farm_Profitable` (binary: Yes/No): whether the farm generated a profit. This is a designated binary target and lets us examine profitability as a complementary lens to raw productivity.
+- **Predictor variables** used across analyses (at least 3 continuous and 3 categorical, as required):
+  - *Continuous:* `Farm_Size_Ha`, `Fertiliser_Kg_Ha`, `Extension_Visits_Year`, `Years_Farming`, `Distance_to_Market_km`
+  - *Categorical:* `Farmer_Sex`, `Education_Level`, `Land_Tenure`, `Soil_Quality`, `Region`, `Access_to_Credit`
+- **Analytical question:** Which farm, behavioural, and market-access factors are associated with yield and profitability, and do farmers cluster into distinct typologies?
+
+Because `Yield_Tonnes_Ha` is continuous, Task 5 requires **Pathway A (multiple linear regression)**, we state this here so the choice is visibly determined by the outcome declared above.
+
+## 2b. Reshaping with `pivot_longer()`
+
+GAHS records four related Yes/No technology and practice-adoption indicators as separate columns: `Uses_Fertiliser`, `Uses_Irrigation`, `Uses_Improved_Seed`, and `Belongs_to_Coop`. In their current wide format, comparing adoption **rates across practices and regions simultaneously** is awkward, we would need four separate summaries. Reshaping these four columns into a single long-format `Practice` / `Adopted` pair lets us compute one adoption-rate table across both **Region** and **Practice** at once, which is exactly what Plot 4 (Section 3, a `geom_tile()` heatmap) requires as its input. This is the downstream purpose that justifies the reshape.
+
+```{r task2b-pivot}
+practice_long <- dat_joined %>%
+  select(Farm_ID, Region, Uses_Fertiliser, Uses_Irrigation,
+         Uses_Improved_Seed, Belongs_to_Coop) %>%
+  pivot_longer(
+    cols = c(Uses_Fertiliser, Uses_Irrigation, Uses_Improved_Seed, Belongs_to_Coop),
+    names_to = "Practice", values_to = "Adopted"
+  ) %>%
+  mutate(Practice = str_replace_all(Practice, "_", " ") %>%
+           str_remove("^Uses ") %>% str_remove("^Belongs to "))
+
+practice_long %>%
+  slice_head(n = 10) %>%
+  flextable() %>%
+  set_caption("First 10 rows of the reshaped (long-format) practice-adoption data") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27)
+```
+
+The reshaped data has `r nrow(practice_long)` rows, exactly four times the `r nrow(dat_joined)` farms, one row per farm per practice, confirming the pivot worked as intended.
+
+## 2c. String Manipulation
+
+We apply three `stringr`-based manipulations, each with a stated reason.
+
+**(1) `str_extract()` — extract the numeric part of `Farm_ID`.** The farm identifier is stored as text (e.g. `"GAHS-F0001"`), which is inconvenient if we ever need a purely numeric farm index (e.g. for merge-order diagnostics or plotting farm sequence). We extract the digits into a new numeric column.
+
+```{r task2c-extract}
+dat_joined <- dat_joined %>%
+  mutate(Farm_ID_Num = str_extract(Farm_ID, "[0-9]+") %>% as.integer())
+
+dat_joined %>% select(Farm_ID, Farm_ID_Num) %>% slice_head(n = 5) %>%
+  flextable() %>% set_caption("Farm_ID before and after str_extract()") %>% 
+  autofit() %>% fit_to_width(max_width = 6.27)
+```
+
+**(2) `str_detect()` — create a binary "formal market channel" indicator from `Market_Channel`.** `Market_Channel` has six text categories (Farmgate, Local market, Regional market, Exporter, Processor, Cooperative). For some analyses a simpler binary distinction, whether a farmer sells through a **formal, higher-value channel** (Exporter, Processor, or Cooperative) versus an informal one (Farmgate, Local/Regional market), is more useful than the full six-level factor. We create this with `str_detect()`.
+
+```{r task2c-detect}
+dat_joined <- dat_joined %>%
+  mutate(Sells_To_Formal_Market = str_detect(Market_Channel, "Exporter|Processor|Cooperative"))
+
+dat_joined %>% distinct(Market_Channel, Sells_To_Formal_Market) %>%
+  flextable() %>% set_caption("Market_Channel before and after str_detect()") %>% 
+  autofit() %>% fit_to_width(max_width = 6.27)
+```
+
+**(3) `str_trim()` / `str_to_title()` — defensive cleaning of `Region`.** Even though a manual check shows `Region` is already consistently formatted in this file, survey data merged from multiple sources or collection rounds commonly develops inconsistent capitalisation or stray whitespace (e.g. `" volta"` vs `"Volta"`), which would silently create duplicate factor levels and break any `group_by(Region)` summary. We apply defensive trimming and title-casing so the pipeline is robust even if this assumption changes in a future data refresh.
+
+```{r task2c-clean-region}
+n_regions_before <- n_distinct(dat_joined$Region)
+dat_joined <- dat_joined %>%
+  mutate(Region = str_trim(Region) %>% str_to_title())
+n_regions_after <- n_distinct(dat_joined$Region)
+c(before = n_regions_before, after = n_regions_after)
+```
+
+Sixteen distinct regions before and after confirms no hidden inconsistencies existed in this particular extract, but the defensive cleaning step is retained as good practice.
+
+## 2d. Filtering, Selecting, and Mutating
+
+**(a) Filter.** We remove farms with a missing value on our primary outcome (`Yield_Tonnes_Ha`), since every downstream analysis in Tasks 3–6 depends on this variable and a model cannot be fit or a plot drawn for a farm with no recorded yield. We also remove the handful of farms with a non-positive recorded farm size, which is agronomically implausible (a farm cannot have zero or negative hectares) and would produce infinite or undefined values once we construct a per-hectare ratio variable below.
+
+```{r task2d-filter}
+n_before_filter <- nrow(dat_joined)
+dat_filtered <- dat_joined %>%
+  filter(!is.na(Yield_Tonnes_Ha), Farm_Size_Ha > 0 | is.na(Farm_Size_Ha))
+n_after_filter <- nrow(dat_filtered)
+n_before_filter - n_after_filter
+```
+
+This removes `r n_before_filter - n_after_filter` rows (`r round(100*(n_before_filter-n_after_filter)/n_before_filter,1)`% of the joined dataset), leaving `r n_after_filter` farms for analysis.
+
+**(b) Select.** We retain the variables needed across our full analysis pipeline which is over the required minimum of 15.
+
+```{r task2d-select}
+dat_selected <- dat_filtered %>%
+  select(
+    Farm_ID, Farm_ID_Num, Region, Latitude, Longitude, Survey_Year, Survey_Season,
+    Farmer_Sex, Farmer_Age, Education_Level, HH_Size, Years_Farming,
+    Farm_Size_Ha, Land_Tenure, Crop_Type, Soil_Quality, Annual_Rainfall_mm,
+    Uses_Fertiliser, Fertiliser_Kg_Ha, Uses_Irrigation, Uses_Improved_Seed,
+    Extension_Visits_Year, Belongs_to_Coop,
+    Yield_Tonnes_Ha, Farm_Revenue_GHS, Input_Cost_GHS, Farm_Profit_GHS,
+    Access_to_Credit, Credit_Amount_GHS, Storage_Facility, Post_Harvest_Loss_Pct,
+    Market_Channel, Sells_To_Formal_Market, Distance_to_Market_km,
+    Food_Insecurity_Score, Farm_Profitable, Sells_Surplus, Tech_Adoption,
+    Market_Traders_Count_avg, Infrastructure_Score_avg, Market_Efficiency_Score_avg
+  )
+ncol(dat_selected)
+```
+
+`r ncol(dat_selected)` variables are retained, comfortably above the required minimum of 15.
+
+**(c) Mutate (at least three operations).**
+
+*New continuous variable — profit per hectare.* Raw `Farm_Profit_GHS` is not directly comparable across farms of very different sizes; a large farm can post a higher absolute profit while being less efficient per unit of land than a smaller, better-managed farm. We construct a size-normalised ratio:
+
+```{r task2d-mutate-continuous}
+dat_selected <- dat_selected %>%
+  mutate(Profit_Per_Ha_GHS = Farm_Profit_GHS / Farm_Size_Ha)
+```
+
+*New categorical variable — farm size class.* We bin the continuous `Farm_Size_Ha` into a policy-relevant three-level classification using `case_when()`, following common smallholder-farming size conventions:
+
+```{r task2d-mutate-categorical}
+dat_selected <- dat_selected %>%
+  mutate(Farm_Size_Class = case_when(
+    Farm_Size_Ha < 2 ~ "Smallholder (<2 ha)",
+    Farm_Size_Ha < 5 ~ "Medium (2-5 ha)",
+    TRUE ~ "Large (5+ ha)"
+  ) %>% factor(levels = c("Smallholder (<2 ha)", "Medium (2-5 ha)", "Large (5+ ha)"),
+               ordered = TRUE))
+table(dat_selected$Farm_Size_Class, useNA = "ifany")
+```
+
+We bin `Farm_Size_Ha` here purely to create a descriptive, policy-relevant grouping variable for use in Tables and plots (e.g. Table 1 stratification), our declared primary outcome remains the continuous `Yield_Tonnes_Ha`, so Task 5 still correctly follows **Pathway A**, not Pathway B.
+
+*Correctly ordered factor levels.* Two variables have a natural ordering that must be encoded explicitly, or R will default to alphabetical ordering, which is both statistically and visually misleading for an ordinal variable:
+
+```{r task2d-ordered-factors}
+dat_selected <- dat_selected %>%
+  mutate(
+    Education_Level = factor(Education_Level,
+      levels = c("None", "Primary", "JHS", "SHS", "Tertiary"), ordered = TRUE),
+    Soil_Quality = factor(Soil_Quality,
+      levels = c("Poor", "Moderate", "Good", "Excellent"), ordered = TRUE)
+  )
+levels(dat_selected$Education_Level)
+levels(dat_selected$Soil_Quality)
+```
+
+## Missing Value Imputation (implementing the Task 1c strategy)
+
+With filtering, selection, and derived variables now in place, we implement the imputation strategies proposed in Task 1c.
+
+```{r task2-imputation}
+set.seed(42)
+
+# Fertiliser_Kg_Ha: legitimately 0 for non-users; missing values must be imputed
+# separately within users and non-users, not pooled, or we would bias both groups
+# toward a single blended average.
+dat_selected <- dat_selected %>%
+  group_by(Uses_Fertiliser) %>%
+  mutate(Fertiliser_Kg_Ha = ifelse(is.na(Fertiliser_Kg_Ha),
+                                     median(Fertiliser_Kg_Ha, na.rm = TRUE),
+                                     Fertiliser_Kg_Ha)) %>%
+  ungroup()
+
+# Straightforward continuous variables with no obvious grouping structure:
+# overall median imputation (robust to the right-skew we observed in Task 3).
+dat_selected <- dat_selected %>%
+  mutate(across(c(Farm_Size_Ha, Input_Cost_GHS, Food_Insecurity_Score,
+                   Farm_Revenue_GHS, Farm_Profit_GHS, Profit_Per_Ha_GHS),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))
+
+# Post_Harvest_Loss_Pct: strongly linked to storage method, so we impute the
+# median loss rate within each Storage_Facility group rather than a single
+# overall median.
+dat_selected <- dat_selected %>%
+  group_by(Storage_Facility) %>%
+  mutate(Post_Harvest_Loss_Pct = ifelse(is.na(Post_Harvest_Loss_Pct),
+                                          median(Post_Harvest_Loss_Pct, na.rm = TRUE),
+                                          Post_Harvest_Loss_Pct)) %>%
+  ungroup()
+
+# Rainfall, distance-to-market, and the aggregated market indicators are all
+# inherently regional quantities, so we impute with the region-level median.
+dat_selected <- dat_selected %>%
+  group_by(Region) %>%
+  mutate(across(c(Annual_Rainfall_mm, Distance_to_Market_km,
+                   Market_Traders_Count_avg, Infrastructure_Score_avg,
+                   Market_Efficiency_Score_avg),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .))) %>%
+  ungroup()
+
+# Credit_Amount_GHS: retained as NA throughout, per the Task 1c strategy —
+# NOT imputed, since missingness here is structural (non-borrowers).
+```
+
+```{r task2-missing-after}
+missing_after <- dat_selected %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Variable", values_to = "N_Missing") %>%
+  filter(N_Missing > 0) %>%
+  arrange(desc(N_Missing))
+
+missing_after %>%
+  flextable() %>%
+  set_caption(
+    "Remaining missingness after imputation (Credit_Amount_GHS retained as NA by design)
+    ") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27)
+```
+
+As expected, only `Credit_Amount_GHS` still contains missing values after imputation, as intended, since we deliberately chose not to impute it.
+
+## 2e. Final Wrangled Dataset
+
+```{r task2e-clean}
+dat_clean <- dat_selected
+glimpse(dat_clean)
+```
+
+```{r task2e-head-table}
+dat_clean %>%
+  slice_head(n = 10) %>%
+  select(Farm_ID, Region, Yield_Tonnes_Ha, Farm_Profitable, Farm_Size_Class,
+         Profit_Per_Ha_GHS, Education_Level, Soil_Quality) %>%
+  flextable() %>%
+  set_caption("First 10 rows of the final analysis-ready dat_clean (selected columns)") %>%
+  autofit() %>%
+  fit_to_width(max_width = 6.27) %>%
+  bold(part = "header")
+```
+
+**Summary.** The wrangling pipeline transformed the raw joined GAHS extract into `dat_clean`: `r nrow(dat_clean)` farms and `r ncol(dat_clean)` variables, with the many-to-many market join resolved via aggregation, four related adoption indicators reshaped into long format for the region-by-practice heatmap in Task 3, three string-based derived variables added, implausible or outcome-missing records removed, at least fifteen analysis-relevant variables retained, three new variables constructed (a per-hectare profit ratio, a farm-size class, and formally ordered education/soil-quality factors), and every variable's missingness either resolved through a justified imputation strategy or deliberately retained as structural NA. `dat_clean` is now ready to support the visualisation, descriptive, inferential, regression, and clustering analyses that follow.
+
+\newpage
+# 3. Task 3: Exploratory Data Analysis and Visualisation
+
+```{r task3-theme}
+theme_set(theme_minimal(base_size = 11))
+pal_binary <- c("#1E2761", "#E8734A")
+```
+
+## Plot 1: Distribution of the Primary Outcome (Yield_Tonnes_Ha)
+
+**Justification.** As our declared primary outcome, understanding the shape of `Yield_Tonnes_Ha`'s distribution is the necessary first step before any modelling, it tells us whether a linear model's normality assumption is plausible at the outset and whether outliers or floor/ceiling effects are present.
+
+```{r plot1-yield-dist, fig.cap="Distribution of crop yield (tonnes/ha) across all farms, with mean and median annotated."}
+p1 <- ggplot(dat_clean, aes(x = Yield_Tonnes_Ha)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 40,
+                 fill = "#5C68B8", color = "white", alpha = 0.85) +
+  geom_density(color = "#E8734A", linewidth = 1) +
+  geom_vline(aes(xintercept = mean(Yield_Tonnes_Ha)),
+             color = "#1E2761", linetype = "dashed", linewidth = 0.8) +
+  geom_vline(aes(xintercept = median(Yield_Tonnes_Ha)),
+             color = "#3E8E5A", linetype = "dotted", linewidth = 0.8) +
+  labs(title = "Distribution of Crop Yield",
+       subtitle = "Dashed = mean, dotted = median",
+       x = "Yield (Tonnes/Ha)", y = "Density") +
+  theme(plot.title = element_text(face = "bold"))
+p1
+```
+
+**Interpretation.** The distribution of yield is right-skewed: the mean (`r round(mean(dat_clean$Yield_Tonnes_Ha),2)` t/ha) sits noticeably above the median (`r round(median(dat_clean$Yield_Tonnes_Ha),2)` t/ha), with a long tail of high-yield farms extending toward 5–6 t/ha. Most farms cluster between roughly 1.5 and 3.5 t/ha. This skew is expected given that yield mixes several very different crop types (e.g. cocoa versus maize) with structurally different yield scales, and it means we should be cautious about assuming normality for `Yield_Tonnes_Ha` in raw form, a consideration we return to directly when checking assumptions in Tasks 4 and 5. The distribution shows no obvious data-entry artefacts (no spike at zero, no implausible values beyond a realistic agronomic range).
+
+## Plot 2: Outcome by a Key Categorical Predictor (Education_Level)
+
+**Justification.** Farmer education is frequently cited in the agricultural economics literature as a channel through which farmers absorb and apply new practices; testing whether it visibly relates to yield here motivates the formal test in Task 4b.
+
+```{r plot2-yield-by-education, fig.cap="Yield by farmer education level, ordered by group median, with group means marked."}
+p2 <- ggplot(dat_clean, aes(x = Education_Level, y = Yield_Tonnes_Ha, fill = Education_Level)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.12, size = 0.7) +
+  stat_summary(fun = mean, geom = "point", shape = 23, size = 3, fill = "white", color = "black") +
+  scale_fill_viridis_d(option = "mako") +
+  labs(title = "Yield by Farmer Education Level",
+       subtitle = "Diamond = group mean",
+       x = "Education Level", y = "Yield (Tonnes/Ha)") +
+  theme(legend.position = "none", plot.title = element_text(face = "bold"))
+p2
+```
+
+**Interpretation.** The boxplots show broadly overlapping distributions across education levels, with group medians and means that do not differ dramatically, there is a very slight upward drift from `None` through `Primary`, but the higher levels (`JHS`, `SHS`, `Tertiary`) do not show a clear additional advantage. This visual impression foreshadows a modest, largely non-significant relationship, which we test formally with an appropriate group-comparison test in Task 4b and revisit when interpreting the regression coefficients in Task 5. The wide spread and heavy overlap within every education group also suggests that education alone is a weak predictor relative to input-use variables, which we examine next.
+
+## Plot 3: Two Continuous Predictors (Fertiliser Use vs. Yield, by Profitability)
+
+**Justification.** Fertiliser application is one of the few input variables a farmer can directly control season to season, so its relationship with yield, and whether that relationship differs for profitable versus unprofitable farms, is of direct practical interest.
+
+```{r plot3-fert-vs-yield, fig.cap="Fertiliser application vs. yield, coloured by farm profitability, with per-group linear fits."}
+p3 <- ggplot(dat_clean, aes(x = Fertiliser_Kg_Ha, y = Yield_Tonnes_Ha, color = Farm_Profitable)) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1) +
+  scale_color_manual(values = pal_binary) +
+  labs(title = "Fertiliser Use vs. Yield, by Farm Profitability",
+       x = "Fertiliser Applied (Kg/Ha)", y = "Yield (Tonnes/Ha)", color = "Farm Profitable") +
+  theme(plot.title = element_text(face = "bold"), legend.position = "bottom")
+p3
+```
+
+**Interpretation.** There is a clear positive, approximately linear relationship between fertiliser application and yield, consistent across both profitability groups, farms applying more fertiliser per hectare tend to harvest more per hectare, as agronomically expected. The two group-specific trend lines run roughly parallel rather than diverging sharply, suggesting fertiliser's *yield* effect is fairly similar for profitable and unprofitable farms; profitability likely also depends on cost and price factors not captured in this two-variable view (which we return to in the regression and clustering analyses). The confidence bands are narrow across most of the fertiliser range, widening only at the upper extreme where fewer farms are observed.
+
+## Plot 4: Multivariate Chart: Technology Adoption Heatmap
+
+**Justification.** We use option (b): a `geom_tile()` heatmap of mean practice-adoption rate across two categorical variables (Region and Practice), built directly from the long-format data reshaped in Task 2b. This is the plot that motivated the Task 2b reshape in the first place, a single wide table could not easily support a two-way heatmap across sixteen regions and four practices simultaneously.
+
+```{r plot4-adoption-heatmap, fig.cap="Technology and practice adoption rate (\\%) by region and practice, built from the Task 2b reshaped data.", fig.height=7}
+region_practice_rate <- practice_long %>%
+  group_by(Region, Practice) %>%
+  summarise(Adoption_Rate_Pct = mean(Adopted == "Yes", na.rm = TRUE) * 100, .groups = "drop")
+
+p4 <- ggplot(region_practice_rate,
+             aes(x = Practice, y = reorder(Region, Adoption_Rate_Pct, FUN = mean),
+                 fill = Adoption_Rate_Pct)) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  geom_text(aes(label = round(Adoption_Rate_Pct)), size = 2.8, color = "white") +
+  scale_fill_viridis_c(option = "magma", direction = -1) +
+  labs(title = "Technology & Practice Adoption Rate by Region",
+       x = "Practice", y = "Region", fill = "Adoption %") +
+  theme(plot.title = element_text(face = "bold"), axis.text.x = element_text(angle = 20, hjust = 1))
+p4
+```
+
+**Interpretation.** Fertiliser use is the most widely adopted practice across almost every region (typically 40–55%), while cooperative membership and improved-seed use are consistently lower (usually 30–45%), and irrigation is the least-adopted practice overall, often below 25% and especially low in the newer northern/eastern regions such as Oti, North East, and Ahafo. Oti stands out with the single highest fertiliser-adoption rate (around 59%) despite one of the lowest irrigation rates, suggesting farmers there substitute chemical input intensity for water-management investment. No single region dominates across all four practices, indicating that technology adoption is genuinely multi-dimensional rather than driven by one overall "modernisation" gradient, a pattern that motivates treating adoption as a set of related but distinct behaviours rather than a single index, and one we revisit through a different lens in the clustering analysis of Task 6.
+
+## Plot 5: Geospatial Visualisation
+
+**Justification.** A regional choropleth lets us see, at a glance, whether yield is geographically structured (e.g. by agro-ecological zone) in a way that farm-level tables cannot easily convey; the complementary farm-level interactive map lets us inspect individual outlier farms directly.
+
+**A note on the basemap.** The task specification asks for Ghana's administrative boundaries via `geodata::gadm(country = "GHA", level = 1)`. That call requires downloading data from an external geospatial data server at runtime. We include the literal instructed call below; if it is unavailable at knit time (e.g. no internet connection, or the server is temporarily down), we automatically fall back to `rnaturalearth::ne_states()`, which ships pre-packaged boundary data and requires no network access. A second, real data-quality issue arises regardless of source: **Natural Earth's administrative boundaries for Ghana reflect the pre-2018 ten-region system**, while GAHS (correctly) uses Ghana's current sixteen regions (the 2018 referendum split Brong-Ahafo into Ahafo/Bono/Bono East, Northern into Northern/Savannah/North East, Volta into Volta/Oti, and Western into Western/Western North). For the choropleth **only**, we therefore aggregate our sixteen regions back to their pre-2018 parent region so they can be joined to the available boundary file; **every non-spatial analysis in this report retains the full sixteen-region granularity**. This is stated here so the simplification is not mistaken for an error.
+
+```{r task3-map-load, results='hide'}
+gh_map <- tryCatch({
+  geodata::gadm(country = "GHA", level = 1, path = tempdir()) %>% sf::st_as_sf()
+}, error = function(e) {
+  message("geodata::gadm() unavailable (no network access); falling back to rnaturalearth.")
+  rnaturalearth::ne_states(country = "Ghana", returnclass = "sf")
+})
+
+# Standardise the region-name column across the two possible sources
+name_col <- intersect(c("NAME_1", "name"), names(gh_map))[1]
+gh_map <- gh_map %>% rename(region_name = !!name_col)
+```
+
+```{r task3-region-agg}
+region_to_old10 <- c(
+  "Ahafo" = "Brong Ahafo", "Bono" = "Brong Ahafo", "Bono East" = "Brong Ahafo",
+  "North East" = "Northern", "Savannah" = "Northern", "Northern" = "Northern",
+  "Oti" = "Volta", "Volta" = "Volta",
+  "Western North" = "Western", "Western" = "Western",
+  "Ashanti" = "Ashanti", "Central" = "Central", "Eastern" = "Eastern",
+  "Greater Accra" = "Greater Accra", "Upper East" = "Upper East", "Upper West" = "Upper West"
+)
+
+region_summary_old10 <- dat_clean %>%
+  mutate(Region_Old10 = unname(region_to_old10[Region])) %>%
+  group_by(Region_Old10) %>%
+  summarise(mean_yield = mean(Yield_Tonnes_Ha, na.rm = TRUE),
+            pct_profitable = mean(Farm_Profitable == "Yes", na.rm = TRUE) * 100,
+            n_farms = n(), .groups = "drop")
+
+gh_map_joined <- gh_map %>%
+  left_join(region_summary_old10, by = c("region_name" = "Region_Old10"))
+```
+
+```{r plot5a-choropleth, fig.cap="Mean crop yield by region (aggregated to pre-2018 boundaries for mapping purposes).", fig.height=7}
+p5a <- ggplot(gh_map_joined) +
+  geom_sf(aes(fill = mean_yield), color = "white", linewidth = 0.3) +
+  geom_sf_text(aes(label = paste0(region_name, "\n", round(mean_yield, 1))),
+               size = 2.3, color = "white", fontface = "bold") +
+  scale_fill_viridis_c(option = "viridis", name = "Mean Yield\n(Tonnes/Ha)") +
+  labs(title = "Mean Crop Yield by Region",
+       subtitle = "Regions aggregated to pre-2018 boundaries; see note above",
+       caption = "Source: GAHS farm data, aggregated by region.") +
+  theme_void(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.caption = element_text(size = 7, color = "grey40"))
+p5a
+```
+
+**Interpretation (choropleth).** Mean yield varies only modestly across regions, from around `r round(min(region_summary_old10$mean_yield),2)` to `r round(max(region_summary_old10$mean_yield),2)` t/ha, with the Volta parent region (combining Volta and Oti) recording the highest mean yield and the Brong Ahafo parent region (combining Bono, Bono East, and Ahafo) the lowest. The modest spread suggests that region alone is not a dominant driver of yield in this data, consistent with the small, mostly non-significant regional coefficients we later find in the Task 5 regression once farm-level inputs are controlled for.
+
+**Interactive farm-level map.** We additionally produce an interactive `leaflet` map of individual farms, coloured by `Farm_Profitable`, with popups showing yield and profit. Because this document is submitted as a **printed hardcopy Word document**, a live JavaScript map cannot be physically printed; we therefore render the interactive widget to a standalone HTML file for on-screen/digital use, and show a static point-map equivalent below for the printed copy.
+
+```{r task3-leaflet, results='hide'}
+pal_leaflet <- colorFactor(c("#E8734A", "#1E2761"), domain = c("No", "Yes"))
+
+farm_map <- leaflet(dat_clean) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(
+    lng = ~Longitude, lat = ~Latitude,
+    radius = 4, stroke = FALSE, fillOpacity = 0.6,
+    color = ~pal_leaflet(Farm_Profitable),
+    popup = ~paste0("<b>Farm ID:</b> ", Farm_ID, "<br>",
+                     "<b>Region:</b> ", Region, "<br>",
+                     "<b>Yield:</b> ", round(Yield_Tonnes_Ha, 2), " t/ha<br>",
+                     "<b>Profit:</b> GHS ", round(Farm_Profit_GHS, 0), "<br>",
+                     "<b>Profitable:</b> ", Farm_Profitable)
+  ) %>%
+  addLegend(
+    "bottomright", pal = pal_leaflet, values = ~Farm_Profitable, title = "Farm Profitable"
+    )
+
+if (requireNamespace("htmlwidgets", quietly = TRUE)) {
+  htmlwidgets::saveWidget(farm_map, "farm_interactive_map.html", selfcontained = TRUE)
+}
+```
+
+```{r plot5b-static-equivalent, fig.cap="Static rendering of the interactive farm-level map: individual farms coloured by profitability (see farm\\_interactive\\_map.html for the live version with popups).", fig.height=7}
+p5b <- ggplot(gh_map) +
+  geom_sf(fill = "grey95", color = "grey70", linewidth = 0.3) +
+  geom_point(data = dat_clean, aes(x = Longitude, y = Latitude, color = Farm_Profitable),
+             alpha = 0.5, size = 1.1) +
+  scale_color_manual(values = pal_binary, name = "Farm\nProfitable") +
+  labs(title = "Individual Farms by Profitability Status",
+       subtitle = "Static equivalent of the interactive leaflet map") +
+  theme_void(base_size = 11) +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+p5b
+```
+
+**Interpretation (interactive/point map).** Individual farms are distributed across all sixteen regions, broadly tracking Ghana's populated agricultural zones, and the overwhelming majority are coloured as profitable, visually confirming the very high profitability rate we found in the regional summary (nearly all regions above 97% `Farm_Profitable == "Yes"`). The small number of unprofitable farms (orange points) do not cluster in any single obvious geographic pocket, suggesting that whatever drives unprofitability in this dataset operates more at the individual farm level than at the regional level, reinforcing the choropleth's finding that region is a relatively weak explanatory factor on its own. The interactive HTML version allows zooming into any individual point to inspect its exact yield and profit figures via the popup, which is impossible to convey in the static, printed rendering.
+
+\newpage
+# 4. Task 4: Descriptive Statistics and Inferential Tests
+
+## 4a. Descriptive Summary Table
+
+We produce a publication-ready Table 1 using `gtsummary::tbl_summary()`, stratified by our secondary outcome `Farm_Profitable`, including two categorical and two continuous variables (in `"continuous2"` format, showing both mean $\pm$ SD and median (Q1, Q3)), with an overall column, bold variable labels, custom variable labels, and a footnote.
+
+```{r task4a-table1}
+table1 <- dat_clean %>%
+  select(Farm_Profitable, Yield_Tonnes_Ha, Farm_Size_Ha, Farmer_Sex, Land_Tenure) %>%
+  tbl_summary(
+    by = Farm_Profitable,
+    type = list(Yield_Tonnes_Ha ~ "continuous2", Farm_Size_Ha ~ "continuous2"),
+    statistic = list(
+      all_continuous2() ~ c("{mean} ({sd})", "{median} ({p25}, {p75})"),
+      all_categorical() ~ "{n} ({p}%)"
+    ),
+    digits = all_continuous() ~ 2,
+    label = list(
+      Yield_Tonnes_Ha ~ "Crop Yield (Tonnes/Ha)",
+      Farm_Size_Ha ~ "Farm Size (Hectares)",
+      Farmer_Sex ~ "Farmer Sex",
+      Land_Tenure ~ "Land Tenure Arrangement"
+    ),
+    missing_text = "Missing"
+  ) %>%
+  add_overall() %>%
+  bold_labels() %>%
+  modify_footnote(
+    all_stat_cols() ~ "Mean (SD); Median (Q1, Q3); n (%)"
+  ) %>%
+  modify_caption(
+    "**Table 1. Farm and Farmer Characteristics, Stratified by Farm Profitability**"
+    )
+
+table1
+```
+
+**Interpretation** Table 1 summarises four key farm and farmer characteristics across `r nrow(dat_clean)` farms, stratified by whether the farm was profitable in the survey year. Mean yield across all farms is around `r round(mean(dat_clean$Yield_Tonnes_Ha),2)` t/ha, with the median noticeably lower than the mean (consistent with the right-skew documented in Plot 1), and profitable farms show a somewhat higher mean yield than the small number of unprofitable farms, which is expected since yield is a direct input into the revenue side of the profit calculation. Farm size shows a similarly right-skewed pattern, with most farms clustering at the smallholder end (well under the mean), and again profitable farms trend marginally larger on average, plausibly reflecting economies of scale in input use and market access. Dispersion is considerable for both continuous variables, the gap between mean and median indicates that a small number of larger or higher-yielding farms pull the average upward, which is why we report both mean/SD and median/IQR via the `"continuous2"` format rather than the mean alone.
+
+Among the categorical variables, the sex distribution of primary farmers is fairly balanced between male and female, with only a modest difference in profitability rates between the two groups, suggesting farmer sex alone is not a strong discriminator of profitability in this sample, a pattern we probe further, together with land tenure, in the inferential tests and regression that follow. Land tenure arrangements are dominated by owned and leased land, with communal, sharecropped, and gifted land comprising smaller shares; profitability rates are broadly similar across tenure types, though sharecropped land shows a marginally different pattern worth checking formally rather than reading from Table 1 alone.
+
+An important caveat when reading this table is that the overwhelming majority of farms in this dataset are recorded as profitable (`Farm_Profitable == "Yes"`), so the "No" column represents a genuinely small, and therefore less statistically stable, subgroup, differences reported for that column should be interpreted cautiously, and any single test involving profitability as a grouping variable (as in Task 4b, Test 3) should be checked for adequate expected cell counts before a chi-square test is used in place of an exact test. No missingness remains in any of the four variables shown, since all were addressed during the Task 2 imputation step; this is noted in the table's footnote.
+
+## 4b. Inferential Tests
+
+We select three tests, one from each required category, each with a stated hypothesis, assumption check, and APA-style conclusion.
+
+### Test 1 - Two-Group Comparison: Yield by Improved Seed Use
+
+**Research hypothesis.** We hypothesise that farmers using certified/improved seed varieties achieve higher yields than those who do not. Formally: $H_0$: mean yield is equal between improved-seed users and non-users; $H_1$: mean yield differs between the two groups.
+
+**Assumption check (normality within each group).**
+
+```{r task4b-test1-assumptions}
+by_seed <- dat_clean %>% select(Yield_Tonnes_Ha, Uses_Improved_Seed) %>% na.omit()
+
+norm_check1 <- by_seed %>%
+  group_by(Uses_Improved_Seed) %>%
+  summarise(shapiro_p = shapiro.test(sample(Yield_Tonnes_Ha, min(n(), 5000)))$p.value, n = n())
+norm_check1
+
+var_check1 <- var.test(Yield_Tonnes_Ha ~ Uses_Improved_Seed, data = by_seed)
+var_check1$p.value
+```
+
+Both groups have Shapiro-Wilk $p > 0.05$ (normality is not rejected), and Levene's/F-test for equal variances is also non-significant, so the assumptions for an **independent-samples t-test** are reasonably satisfied and we use it rather than the Mann-Whitney U alternative.
+
+```{r task4b-test1}
+t_result <- t.test(Yield_Tonnes_Ha ~ Uses_Improved_Seed, data = by_seed,
+                    var.equal = (var_check1$p.value > 0.05))
+t_result
+cohens_d_result <- by_seed %>% cohens_d(Yield_Tonnes_Ha ~ Uses_Improved_Seed)
+cohens_d_result
+broom::tidy(t_result)
+```
+
+**APA-style conclusion.** An independent-samples t-test found a statistically significant difference in yield between farmers who used improved seed (*M* = `r round(t_result$estimate[2],2)` t/ha) and those who did not (*M* = `r round(t_result$estimate[1],2)` t/ha), *t*(`r round(t_result$parameter,1)`) = `r round(t_result$statistic,2)`, *p* < .001, Cohen's *d* = `r round(cohens_d_result$effsize,2)`, a small-to-medium effect. We reject $H_0$ and conclude that improved seed use is associated with meaningfully higher yield in this sample.
+
+### Test 2 - Three-or-More-Group Comparison: Yield by Soil Quality
+
+**Research hypothesis.** We hypothesise that farmer-assessed soil quality is associated with yield. $H_0$: mean/rank of yield is equal across all four soil-quality categories; $H_1$: at least one category differs.
+
+**Assumption check.**
+
+```{r task4b-test2-assumptions}
+by_soil <- dat_clean %>% select(Yield_Tonnes_Ha, Soil_Quality) %>% na.omit()
+
+norm_check2 <- by_soil %>%
+  group_by(Soil_Quality) %>%
+  summarise(shapiro_p = shapiro.test(sample(Yield_Tonnes_Ha, min(n(), 5000)))$p.value, n = n())
+norm_check2
+
+levene_result <- levene_test(by_soil, Yield_Tonnes_Ha ~ Soil_Quality)
+levene_result
+```
+
+One of the four groups (`Excellent`) shows a Shapiro-Wilk $p < 0.05$, so the normality assumption required for a standard one-way ANOVA is not fully satisfied across all groups, even though Levene's test indicates equal variances. We therefore use the non-parametric **Kruskal-Wallis test** as the more defensible choice, with Dunn's test for pairwise post-hoc comparisons.
+
+```{r task4b-test2}
+kw_result <- kruskal.test(Yield_Tonnes_Ha ~ Soil_Quality, data = by_soil)
+kw_result
+
+eta2_result <- by_soil %>% kruskal_effsize(Yield_Tonnes_Ha ~ Soil_Quality)
+eta2_result
+
+dunn_result <- by_soil %>% dunn_test(Yield_Tonnes_Ha ~ Soil_Quality, p.adjust.method = "bonferroni")
+dunn_result
+
+broom::tidy(kw_result)
+```
+
+**APA-style conclusion.** A Kruskal-Wallis test found no statistically significant difference in yield across soil-quality categories, $\chi^2$(`r kw_result$parameter`) = `r round(kw_result$statistic,2)`, *p* = `r round(kw_result$p.value,3)`, $\eta^2_H$ = `r round(eta2_result$effsize,4)` (negligible effect). We fail to reject $H_0$: in this sample, farmer-assessed soil quality alone is not associated with a detectable difference in yield, once other factors are not accounted for, a result worth revisiting once input-use variables are controlled for in the Task 5 regression.
+
+### Test 3 - Association Between Two Categorical Variables: Credit Access and Profitability
+
+**Research hypothesis.** We hypothesise that access to agricultural credit is associated with farm profitability. $H_0$: `Access_to_Credit` and `Farm_Profitable` are independent; $H_1$: they are associated.
+
+**Assumption check (expected cell counts).**
+
+```{r task4b-test3-assumptions}
+credit_profit_tab <- table(dat_clean$Access_to_Credit, dat_clean$Farm_Profitable)
+credit_profit_tab
+
+expected_counts <- chisq.test(credit_profit_tab)$expected
+expected_counts
+min(expected_counts)
+```
+
+The minimum expected cell count is `r round(min(expected_counts),2)`, which is **below the conventional threshold of 5** required for a valid chi-square approximation. Per the assignment's own decision rule, we therefore use **Fisher's exact test** instead of the chi-square test.
+
+```{r task4b-test3}
+fisher_result <- fisher.test(credit_profit_tab)
+fisher_result
+
+cramers_v_result <- assocstats(credit_profit_tab)
+cramers_v_result$cramer
+broom::tidy(fisher_result)
+```
+
+**APA-style conclusion.** Fisher's exact test found no statistically significant association between access to credit and farm profitability, *p* = `r round(fisher_result$p.value,3)`, odds ratio = `r round(fisher_result$estimate,2)`, Cramér's V = `r round(cramers_v_result$cramer,3)` (negligible association). We fail to reject $H_0$: in this sample, credit access is not detectably related to whether a farm is profitable, though this result should be interpreted cautiously given how few farms in the sample are recorded as unprofitable, which limits the test's statistical power.
+
+\newpage
+# 5. Task 5: Regression Analysis
+
+**Pathway chosen.** Our primary outcome, `Yield_Tonnes_Ha`, is continuous (declared in Task 2a). Per the assignment's choice rule, we therefore take **Pathway A: Multiple Linear Regression**. This is the correct method here because we want to quantify the direction and magnitude of association between several simultaneous predictors and a continuous, roughly interval-scaled outcome, while controlling for confounding between predictors which is what OLS regression estimates.
+
+```{r task5-setup}
+dat_reg <- dat_clean %>%
+  mutate(Region = factor(Region), Land_Tenure = factor(Land_Tenure))
+```
+
+**Full model.** We include at least three numeric and two categorical predictors, chosen from the predictor set declared in Task 2a: `Farm_Size_Ha`, `Fertiliser_Kg_Ha`, `Extension_Visits_Year`, and `Years_Farming` (numeric), and `Region` and `Land_Tenure` (categorical).
+
+```{r task5-full-model}
+m_full <- lm(Yield_Tonnes_Ha ~ Farm_Size_Ha + Fertiliser_Kg_Ha + Extension_Visits_Year +
+               Years_Farming + Region + Land_Tenure, data = dat_reg)
+summary(m_full)
+```
+
+## Assumption Checks (LINE)
+
+**Linearity and homoscedasticity: Residuals vs Fitted.**
+
+```{r task5-diag-resfit, fig.cap="Residuals vs Fitted values for the full linear regression model."}
+diag_full <- broom::augment(m_full)
+
+p_resfit <- ggplot(diag_full, aes(x = .fitted, y = .resid)) +
+  geom_point(alpha = 0.3, color = "#5C68B8") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "#E8734A", linewidth = 1) +
+  geom_smooth(se = FALSE, color = "#1E2761", linewidth = 0.8) +
+  labs(title = "Residuals vs Fitted", x = "Fitted values", y = "Residuals") +
+  theme_minimal()
+p_resfit
+```
+
+**Normality of residuals: Q-Q plot.**
+
+```{r task5-diag-qq, fig.cap="Normal Q-Q plot of standardised residuals for the full linear regression model."}
+p_qq <- ggplot(diag_full, aes(sample = .std.resid)) +
+  stat_qq(alpha = 0.4, color = "#5C68B8") +
+  stat_qq_line(color = "#E8734A", linewidth = 1) +
+  labs(title = "Normal Q-Q Plot", x = "Theoretical Quantiles", y = "Standardised Residuals") +
+  theme_minimal()
+p_qq
+```
+
+```{r task5-diag-tests}
+shapiro_resid_p <- shapiro.test(sample(diag_full$.resid, min(5000, nrow(diag_full))))$p.value
+shapiro_resid_p
+
+bp_test <- ncvTest(m_full)
+bp_test
+```
+
+**Multicollinearity — VIF.**
+
+```{r task5-vif}
+vif(m_full)
+```
+
+All four LINE-related checks support the model: residuals scatter randomly around zero with no funnel shape (homoscedasticity plausible; Breusch-Pagan *p* = `r round(bp_test$p,3)`), the Q-Q plot follows the reference line closely (Shapiro-Wilk on residuals *p* = `r round(shapiro_resid_p,3)`, normality not rejected), and every VIF is close to 1 (no multicollinearity concern; all well under the conventional threshold of 5).
+
+## Variable Selection with `stepAIC()`
+
+We use `MASS::stepAIC()` in both directions. A first unconstrained run drops **every** categorical predictor entirely (Region and Land_Tenure), which would leave a final model with no categorical predictors at all, violating the requirement that the reported model include at least two. We therefore constrain the search with a `scope` argument that forces `Region` and `Land_Tenure` to remain in the model, letting `stepAIC()` freely select among the numeric predictors only. This is a transparent, justified constraint, not an attempt to cherry-pick significant results: both Region and Land_Tenure are substantively meaningful predictors we want represented in the final model regardless of their individual AIC contribution.
+
+```{r task5-stepaic}
+m_step <- stepAIC(m_full, direction = "both",
+                   scope = list(lower = ~ Region + Land_Tenure),
+                   trace = FALSE)
+summary(m_step)
+formula(m_step)
+vif(m_step)
+```
+
+`stepAIC()` drops `Years_Farming` (its inclusion did not meaningfully improve AIC) while retaining `Farm_Size_Ha`, `Fertiliser_Kg_Ha`, `Extension_Visits_Year`, `Region`, and `Land_Tenure` — three numeric and two categorical predictors, satisfying the task requirement, with essentially identical AIC to the full model (`r round(AIC(m_full),1)` vs `r round(AIC(m_step),1)`), confirming no meaningful predictive information was lost.
+
+## Final Model Table
+
+```{r task5-gtsummary}
+tbl_regression(m_step,
+  label = list(
+    Farm_Size_Ha ~ "Farm Size (Ha)",
+    Fertiliser_Kg_Ha ~ "Fertiliser (Kg/Ha)",
+    Extension_Visits_Year ~ "Extension Visits/Year",
+    Region ~ "Region",
+    Land_Tenure ~ "Land Tenure"
+  ),
+  intercept = TRUE
+) %>%
+  add_glance_table(include = c(r.squared, adj.r.squared, AIC)) %>%
+  bold_labels() %>%
+  modify_caption("**Table 2. Final Multiple Linear Regression Model — Yield (Tonnes/Ha)**")
+```
+
+## Results Interpretation
+
+The final model explains a modest but statistically significant share of the variance in yield (R$^2$ = `r round(summary(m_step)$r.squared,3)`, adjusted R$^2$ = `r round(summary(m_step)$adj.r.squared,3)`, *F*(`r m_step$rank-1`, `r m_step$df.residual`) = `r round(summary(m_step)$fstatistic[1],1)`, *p* < .001). Among the retained predictors, **Fertiliser_Kg_Ha** has the strongest and most precisely estimated effect: each additional kilogram of fertiliser per hectare is associated with a `r round(coef(m_step)["Fertiliser_Kg_Ha"],4)` tonne/ha increase in yield (*p* < .001), consistent with the clear positive pattern already visible in Plot 3. **Farm_Size_Ha** is also significant and positive (`r round(coef(m_step)["Farm_Size_Ha"],4)` t/ha per additional hectare, *p* < .001), suggesting larger farms achieve somewhat higher per-hectare yield rather than the diminishing returns sometimes seen in smallholder contexts. **Extension_Visits_Year** shows a significant positive effect as well (`r round(coef(m_step)["Extension_Visits_Year"],4)` t/ha per visit, *p* < .001), supporting the agricultural-extension literature's emphasis on farmer contact with advisory services. Neither Region nor Land_Tenure shows many individually significant category effects once the input variables are controlled for, echoing the modest regional spread already seen in the Plot 5 choropleth; one land-tenure category (Sharecrop) is marginally significant, worth flagging for future investigation with a larger sample. Overall, the model indicates that **direct, farmer-controllable inputs (fertiliser, extension contact) matter more for yield than farm location or tenure arrangement** in this dataset.
+
+\newpage
+
+# 6. Task 6: Predictive Analytics - Unsupervised Machine Learning
+
+**Approach chosen and justification.** We choose **Option B: Unsupervised Machine Learning**. Our analytical question asks not only "what predicts yield" (already addressed by the Task 5 regression) but also whether farmers **naturally group into distinct typologies** based on their production and market-access profile, a question about latent structure in the data, not about predicting a single labelled target, which is what clustering (rather than supervised classification) is designed to answer. Unsupervised learning also usefully complements Task 5: where the regression tells us the *marginal* effect of each variable holding others constant, clustering can reveal *combinations* of characteristics (e.g. small-scale, low-input, high-distance-to-market farms as a group) that a linear model's additive structure cannot directly surface.
+
+## Variable Selection for Clustering
+
+We cluster on six continuous variables spanning farm scale, input intensity, extension contact, market access, and outcomes: `Farm_Size_Ha`, `Fertiliser_Kg_Ha`, `Extension_Visits_Year`, `Distance_to_Market_km`, `Yield_Tonnes_Ha`, and `Profit_Per_Ha_GHS`. We expect this combination to reveal typologies such as "small, low-input, high-yield" versus "large, high-input, lower-margin" farms, profiles that would be useful for targeting agricultural extension or credit programmes differently across farmer segments.
+
+```{r task6-setup}
+set.seed(42)
+clust_vars <- dat_clean %>%
+  select(Farm_Size_Ha, Fertiliser_Kg_Ha, Extension_Visits_Year,
+         Distance_to_Market_km, Yield_Tonnes_Ha, Profit_Per_Ha_GHS) %>%
+  na.omit()
+nrow(clust_vars)
+```
+
+## Scaling
+
+**Why scaling is necessary.** K-means and hierarchical clustering both rely on Euclidean distance between observations. `Farm_Size_Ha` (typically 0–10) and `Distance_to_Market_km` (potentially 0–50+) are on completely different numeric scales from `Fertiliser_Kg_Ha` (0–180+) or `Profit_Per_Ha_GHS` (potentially in the thousands); without standardisation, the variable with the largest numeric range would dominate the distance calculation regardless of its actual substantive importance. We therefore standardise every clustering variable to mean 0, SD 1 before clustering.
+
+```{r task6-scale}
+clust_scaled <- scale(clust_vars)
+round(colMeans(clust_scaled), 3)
+round(apply(clust_scaled, 2, sd), 3)
+```
+
+## Determining the Optimal Number of Clusters
+
+```{r task6-elbow, fig.cap="Elbow method: total within-cluster sum of squares by k."}
+fviz_nbclust(clust_scaled, kmeans, method = "wss", k.max = 10) +
+  labs(title = "Elbow Method for Optimal k")
+```
+
+```{r task6-silhouette, fig.cap="Average silhouette width by k."}
+fviz_nbclust(clust_scaled, kmeans, method = "silhouette", k.max = 10) +
+  labs(title = "Average Silhouette Width")
+```
+
+The elbow plot shows a bend around *k* = 3–4, and the silhouette plot shows a clear peak at ***k* = 4** (average width $\approx$ 0.24, the highest of any candidate value), so we proceed with **k = 4** — the point at which the two diagnostics agree.
+
+## K-Means and Hierarchical Clustering
+
+```{r task6-kmeans}
+set.seed(42)
+km_result <- kmeans(clust_scaled, centers = 4, nstart = 25)
+table(km_result$cluster)
+```
+
+```{r task6-hclust}
+dist_matrix <- dist(clust_scaled, method = "euclidean")
+hc_result <- hclust(dist_matrix, method = "ward.D2")
+hc_clusters <- cutree(hc_result, k = 4)
+table(hc_clusters)
+```
+
+**Cross-tabulation of the two methods.**
+
+```{r task6-crosstab}
+crosstab <- table(KMeans = km_result$cluster, Hierarchical = hc_clusters)
+crosstab
+```
+
+The two methods agree on the broad shape of the clustering (e.g. K-means cluster 3 and hierarchical cluster 2 substantially overlap, as do K-means cluster 1 and hierarchical cluster 4), though they do not align perfectly, expected, since the two algorithms optimise different objective functions (K-means minimises within-cluster variance directly; Ward's method builds a hierarchy by minimising the increase in variance at each merge step). We use the K-means solution as our primary result below because it directly optimises the criterion we used to select *k*.
+
+## PCA-Projected Cluster Plot
+
+```{r task6-pca, fig.cap="K-means clusters projected onto the first two principal components."}
+fviz_cluster(km_result, data = clust_scaled, geom = "point", ellipse.type = "convex",
+             palette = "jco", ggtheme = theme_minimal()) +
+  labs(title = "K-means Clusters (PCA Projection)")
+```
+
+The first two principal components capture a modest share of total variance, and the four clusters show visible but overlapping centres rather than fully separated groups, consistent with the moderate silhouette width found above. This tells us the clusters represent real but graded differences in farm profile rather than sharply distinct farmer "types."
+
+## Cluster Profiles
+
+```{r task6-profile, fig.cap="Standardised cluster profile means across the six clustering variables."}
+cluster_profile <- as.data.frame(clust_scaled) %>%
+  mutate(cluster = factor(km_result$cluster)) %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean)) %>%
+  pivot_longer(-cluster, names_to = "variable", values_to = "std_mean")
+
+ggplot(cluster_profile, aes(x = variable, y = std_mean, color = cluster, group = cluster)) +
+  geom_line(linewidth = 1) + geom_point(size = 2.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  coord_flip() +
+  labs(title = "Cluster Profile: Standardised Means", y = "Standardised mean", x = NULL) +
+  theme_minimal()
+```
+
+```{r task6-profile-table}
+cluster_profile %>%
+  pivot_wider(names_from = variable, values_from = std_mean) %>%
+  mutate(across(where(is.numeric), ~round(.,2))) %>%
+  flextable() %>%
+  set_caption("Cluster profile: standardised means by cluster") %>%
+  autofit()%>%
+  fit_to_width(max_width = 6.27)
+```
+
+## Cluster Choropleth
+
+```{r task6-choropleth, fig.cap="Most common (modal) farm cluster by region.", fig.height=7}
+clust_geo <- dat_clean %>%
+  select(Region, Farm_Size_Ha, Fertiliser_Kg_Ha, Extension_Visits_Year,
+         Distance_to_Market_km, Yield_Tonnes_Ha, Profit_Per_Ha_GHS) %>%
+  na.omit() %>%
+  mutate(cluster = factor(km_result$cluster))
+
+region_mode_cluster <- clust_geo %>%
+  mutate(Region_Old10 = unname(region_to_old10[Region])) %>%
+  count(Region_Old10, cluster) %>%
+  group_by(Region_Old10) %>%
+  slice_max(n, n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+gh_map_clust <- gh_map %>% left_join(region_mode_cluster, by = c("region_name" = "Region_Old10"))
+
+ggplot(gh_map_clust) +
+  geom_sf(aes(fill = cluster), color = "white", linewidth = 0.3) +
+  geom_sf_text(aes(label = region_name), size = 2.5, color = "white", fontface = "bold") +
+  scale_fill_brewer(palette = "Set2", name = "Dominant\nCluster") +
+  labs(title = "Most Common Farm Cluster by Region") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+## Interpretation
+
+Cluster 2 is the **input-intensive, extension-connected** group: high fertiliser use and the most frequent extension contact, associated with above-average yield, these are farmers actively engaged with formal agricultural support systems. Cluster 1 is the **larger-farm** group, distinguished mainly by above-average farm size with otherwise fairly typical input use. Cluster 3, the largest group by far, represents the **low-input majority**: below-average fertiliser use, extension contact, and farm size, the typical smallholder profile with limited access to intensification inputs. Cluster 4 is a smaller, less input-intensive group similar in direction to Cluster 3 but distinguished by its own combination of scale and distance characteristics. Geographically, Cluster 3 (the low-input majority) dominates nearly every region, which is consistent with the overall sample composition, while Upper East stands out as the only region where a different cluster is modal, suggesting a locally distinct farming profile worth further investigation. The moderate silhouette width ($\approx$ 0.24) and overlapping PCA plot indicate these are graded tendencies rather than sharply separated farmer types, which is a realistic and expected finding for continuous agricultural survey data rather than a limitation unique to our method. Practically, this segmentation suggests agricultural extension resources could be prioritised toward the large low-input majority (Cluster 3), who have the most apparent room to benefit from the input-intensification pattern already visible in Cluster 2.
+
+\newpage
+# 7. Appendix
+
+## A.1 Supplementary Plot: Yield by Farm Size Class
+
+```{r appendix-plot1, fig.cap="Supplementary plot: yield distribution by the derived Farm\\_Size\\_Class variable (Task 2d)."}
+ggplot(dat_clean, aes(x = Farm_Size_Class, y = Yield_Tonnes_Ha, fill = Farm_Size_Class)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_viridis_d(option = "cividis") +
+  labs(title = "Yield by Farm Size Class", x = "Farm Size Class", y = "Yield (Tonnes/Ha)") +
+  theme_minimal() + theme(legend.position = "none")
+```
+
+## A.2 Supplementary Table: Regional Summary Statistics
+
+```{r appendix-table1}
+dat_clean %>%
+  group_by(Region) %>%
+  summarise(
+    n_farms = n(),
+    mean_yield = round(mean(Yield_Tonnes_Ha, na.rm = TRUE), 2),
+    pct_profitable = round(mean(Farm_Profitable == "Yes", na.rm = TRUE) * 100, 1),
+    mean_profit_per_ha = round(mean(Profit_Per_Ha_GHS, na.rm = TRUE), 0)
+  ) %>%
+  arrange(desc(mean_yield)) %>%
+  flextable() %>%
+  set_caption(
+    "Supplementary Table: regional summary statistics (full 16-region granularity)"
+    ) %>%
+  autofit() %>%
+  fit_to_width(max_width = 6.27)
+```
+
+## A.3 Session Information
+
+```{r appendix-sessioninfo}
+sessionInfo()
+```
